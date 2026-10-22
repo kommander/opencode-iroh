@@ -2,10 +2,11 @@
   "name": "@opencode-ai/iroh",
   "version": "0.1.0",
   "description": "Minimal Node/Bun binding for iroh endpoints, connections and bi-directional streams",
+  "private": true,
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/anomalyco/opencode-iroh.git"
+    "url": "git+https://github.com/kommander/opencode-iroh.git"
   },
   "main": "index.js",
   "types": "index.d.ts",
@@ -33,9 +34,7 @@
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
     "test": "bun test",
-    "artifacts": "napi artifacts",
-    "prepublishOnly": "napi prepublish -t npm --no-gh-release",
-    "version": "napi version"
+    "artifacts": "napi artifacts"
   },
   "devDependencies": {
     "@napi-rs/cli": "3.10.9"

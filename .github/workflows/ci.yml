@@ -92,24 +92,41 @@ jobs:
           path: .
       - run: bun test
 
-  publish:
-    name: publish
+  release:
+    name: release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build, test]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
-      - run: bunx napi create-npm-dirs
+      - run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
-      - run: bun run artifacts
+      - run: bunx napi create-npm-dirs && bun run artifacts
+      - name: Point optionalDependencies at this release's platform tarballs
+        shell: node {0}
+        run: |
+          const fs = require("fs")
+          const base = `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${process.env.GITHUB_REF_NAME}`
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"))
+          pkg.optionalDependencies = {}
+          for (const dir of fs.readdirSync("npm")) {
+            const { name, version } = JSON.parse(fs.readFileSync(`npm/${dir}/package.json`, "utf8"))
+            pkg.optionalDependencies[name] = `${base}/${name.slice(1).replace("/", "-")}-${version}.tgz`
+          }
+          fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n")
       - run: |
-          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-          npm publish --access public
+          mkdir dist
+          for dir in npm/*/; do cp LICENSE "$dir" && npm pack "./$dir" --pack-destination dist; done
+          npm pack --pack-destination dist
+          ls -l dist
+      - run: gh release create "$GITHUB_REF_NAME" dist/*.tgz --title "$GITHUB_REF_NAME" --generate-notes
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
