@@ -86,10 +86,12 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: dtolnay/rust-toolchain@1.93.0
       - uses: actions/download-artifact@v8
         with:
           name: bindings-${{ matrix.target }}
           path: .
+      - run: cargo build --example relay
       - run: bun test
 
   release:

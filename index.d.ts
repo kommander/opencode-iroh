@@ -24,6 +24,11 @@ export declare class Endpoint {
   addr(): EndpointAddr
   /** Local UDP sockets, possibly wildcard (`0.0.0.0:port`, `[::]:port`). */
   boundSockets(): Array<string>
+  /**
+   * Sets the bearer token for the `relayUrls` relays, or removes them from the relay map with null. Only relay
+   * connections started afterwards use it: iroh keeps a started connection's token, also for its reconnects.
+   */
+  setRelayToken(token?: string | undefined | null): Promise<void>
   /** Resolves once a home relay is connected. */
   online(): Promise<void>
   /** Dials `addr` with the endpoint's ALPN. The TLS handshake proves the remote holds `addr.id`'s key. */
@@ -55,7 +60,7 @@ export declare class SendStream {
   reset(code?: number | undefined | null): Promise<void>
 }
 
-/** Binds an endpoint with the n0 default relays and no public address lookup. */
+/** Binds an endpoint with the n0 default relays (or `relayUrls`) and no public address lookup. */
 export declare function bind(options: BindOptions): Promise<Endpoint>
 
 export interface BindOptions {
@@ -68,6 +73,11 @@ export interface BindOptions {
    * connections open. Unset keeps iroh's defaults.
    */
   idleTimeoutMs?: number
+  /**
+   * Own relays to use instead of n0's, with QUIC address discovery on port 7842. They stay unused until
+   * `setRelayToken` provides their bearer token.
+   */
+  relayUrls?: Array<string>
 }
 
 export interface BiStream {

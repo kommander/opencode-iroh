@@ -1,7 +1,7 @@
-use std::{fmt::Display, net::SocketAddr, str::FromStr, time::Duration};
+use std::{fmt::Display, net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
 use iroh::endpoint::{self, QuicTransportConfig, VarInt, presets};
-use iroh::{EndpointId, RelayMode, RelayUrl, SecretKey, TransportAddr};
+use iroh::{EndpointId, RelayConfig, RelayMap, RelayMode, RelayUrl, SecretKey, TransportAddr};
 use napi::bindgen_prelude::{Buffer, Uint8Array};
 use napi_derive::napi;
 use tokio::sync::{Mutex, Notify};
@@ -23,6 +23,9 @@ pub struct BindOptions {
   /// Closes connections after this long without hearing from the peer; keep-alives every third of it keep live idle
   /// connections open. Unset keeps iroh's defaults.
   pub idle_timeout_ms: Option<u32>,
+  /// Own relays to use instead of n0's, with QUIC address discovery on port 7842. They stay unused until
+  /// `setRelayToken` provides their bearer token.
+  pub relay_urls: Option<Vec<String>>,
 }
 
 /// How to reach an endpoint: its id plus an optional home relay URL and direct `ip:port` addresses.
@@ -33,7 +36,7 @@ pub struct EndpointAddr {
   pub addresses: Vec<String>,
 }
 
-/// Binds an endpoint with the n0 default relays and no public address lookup.
+/// Binds an endpoint with the n0 default relays (or `relayUrls`) and no public address lookup.
 #[napi]
 pub async fn bind(options: BindOptions) -> napi::Result<Endpoint> {
   let key: [u8; 32] = options
@@ -42,10 +45,19 @@ pub async fn bind(options: BindOptions) -> napi::Result<Endpoint> {
     .try_into()
     .map_err(|_| error("secretKey must be 32 bytes"))?;
   let alpn = options.alpn.into_bytes();
+  let relays = (options.relay_urls.iter().flatten())
+    .map(|url| RelayUrl::from_str(url).map_err(error))
+    .collect::<napi::Result<Vec<_>>>()?;
+  // iroh reads a relay's token once, when it starts the relay connection, and reuses it for every reconnect, so own
+  // relays join the map only once their token is known.
+  let mode = match options.relay_urls {
+    Some(_) => RelayMode::Custom(RelayMap::empty()),
+    None => RelayMode::Default,
+  };
   let mut builder = iroh::Endpoint::builder(presets::Minimal)
     .secret_key(SecretKey::from_bytes(&key))
     .alpns(vec![alpn.clone()])
-    .relay_mode(RelayMode::Default);
+    .relay_mode(mode);
   if let Some(ms) = options.idle_timeout_ms {
     let transport = QuicTransportConfig::builder()
       .max_idle_timeout(Some(VarInt::from_u32(ms).into()))
@@ -54,13 +66,18 @@ pub async fn bind(options: BindOptions) -> napi::Result<Endpoint> {
     builder = builder.transport_config(transport);
   }
   let inner = builder.bind().await.map_err(error)?;
-  Ok(Endpoint { inner, alpn })
+  Ok(Endpoint {
+    inner,
+    alpn,
+    relays,
+  })
 }
 
 #[napi]
 pub struct Endpoint {
   inner: iroh::Endpoint,
   alpn: Vec<u8>,
+  relays: Vec<RelayUrl>,
 }
 
 #[napi]
@@ -90,6 +107,23 @@ impl Endpoint {
       .iter()
       .map(|addr| addr.to_string())
       .collect()
+  }
+
+  /// Sets the bearer token for the `relayUrls` relays, or removes them from the relay map with null. Only relay
+  /// connections started afterwards use it: iroh keeps a started connection's token, also for its reconnects.
+  #[napi]
+  pub async fn set_relay_token(&self, token: Option<String>) {
+    for url in &self.relays {
+      match &token {
+        Some(token) => {
+          let config = RelayConfig::from(url.clone()).with_auth_token(token);
+          self.inner.insert_relay(url.clone(), Arc::new(config)).await;
+        }
+        None => {
+          self.inner.remove_relay(url).await;
+        }
+      }
+    }
   }
 
   /// Resolves once a home relay is connected.
