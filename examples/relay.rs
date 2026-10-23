@@ -1,7 +1,7 @@
 //! Relay server for the tests: plain HTTP on a random local port, admitting only the bearer token "good". Each line
 //! on stdin restarts it on the same port, dropping all connections, admitting only the token on that line.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use iroh_relay::server::{Access, AccessControl, ClientRequest, RelayConfig, Server, ServerConfig};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -33,6 +33,8 @@ async fn main() {
   println!("http://{addr}");
   let mut lines = BufReader::new(tokio::io::stdin()).lines();
   while let Ok(Some(token)) = lines.next_line().await {
+    // Shutdown disconnects only registered clients; a client that just completed its handshake may not be yet.
+    tokio::time::sleep(Duration::from_millis(500)).await;
     server.shutdown().await.expect("relay shutdown");
     server = spawn(addr, token).await;
     println!("restarted");
