@@ -9,7 +9,7 @@ The endpoint uses iroh's minimal preset with the default n0 relays (or your own,
 Distributed through [GitHub Releases](https://github.com/kommander/opencode-iroh/releases) only; nothing is published to npm (`@opencode-ai/iroh` is just the package name).
 
 ```sh
-bun add https://github.com/kommander/opencode-iroh/releases/download/v0.1.1/opencode-ai-iroh-0.1.1.tgz
+bun add https://github.com/kommander/opencode-iroh/releases/download/v0.2.0/opencode-ai-iroh-0.2.0.tgz
 ```
 
 The main tarball holds the loader and type declarations. Its `optionalDependencies` point at that release's platform tarballs (`opencode-ai-iroh-<platform>-<version>.tgz`, one `.node` each), and the loader picks the one matching the host. Bun does not filter tarball dependencies by `os`/`cpu`, so it downloads all eight platform tarballs (about 25 MB). The lockfile pins each tarball's integrity, so release assets must never be replaced.
