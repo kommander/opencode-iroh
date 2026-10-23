@@ -19,7 +19,7 @@ The main tarball holds the loader and type declarations. Its `optionalDependenci
 ```ts
 import { bind } from "@opencode-ai/iroh"
 
-const endpoint = await bind({ secretKey, alpn: "opencode/peer/1" }) // secretKey: 32 bytes
+const endpoint = await bind({ secretKey, alpn: "opencode/peer/1", idleTimeoutMs: 10_000 }) // secretKey: 32 bytes
 endpoint.id() // hex public key
 await endpoint.online() // resolves once a home relay is connected
 endpoint.addr() // { id, relay: string | null, addresses: string[] }
@@ -43,6 +43,8 @@ connection.closeReason() // null while open
 connection.close(0, "bye")
 await endpoint.close()
 ```
+
+`idleTimeoutMs` (optional) closes a connection once the peer has been silent that long, so a dead peer is noticed within roughly `idleTimeoutMs` to 4/3 × `idleTimeoutMs`; keep-alives every `idleTimeoutMs / 3` keep healthy idle connections open. Keep the `Endpoint` referenced while its connections are in use: if it is garbage collected, its connections close.
 
 `send.reset(code?)` and `recv.stop(code?)` abort a stream and interrupt a pending `writeAll` / `read`. See [`index.d.ts`](index.d.ts) for the full declarations.
 

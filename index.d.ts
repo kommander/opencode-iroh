@@ -63,6 +63,11 @@ export interface BindOptions {
   secretKey: Uint8Array
   /** The single ALPN this endpoint accepts and dials. */
   alpn: string
+  /**
+   * Closes connections after this long without hearing from the peer; keep-alives every third of it keep live idle
+   * connections open. Unset keeps iroh's defaults.
+   */
+  idleTimeoutMs?: number
 }
 
 export interface BiStream {

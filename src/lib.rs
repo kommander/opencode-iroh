@@ -1,6 +1,6 @@
-use std::{fmt::Display, net::SocketAddr, str::FromStr};
+use std::{fmt::Display, net::SocketAddr, str::FromStr, time::Duration};
 
-use iroh::endpoint::{self, VarInt, presets};
+use iroh::endpoint::{self, QuicTransportConfig, VarInt, presets};
 use iroh::{EndpointId, RelayMode, RelayUrl, SecretKey, TransportAddr};
 use napi::bindgen_prelude::{Buffer, Uint8Array};
 use napi_derive::napi;
@@ -20,6 +20,9 @@ pub struct BindOptions {
   pub secret_key: Uint8Array,
   /// The single ALPN this endpoint accepts and dials.
   pub alpn: String,
+  /// Closes connections after this long without hearing from the peer; keep-alives every third of it keep live idle
+  /// connections open. Unset keeps iroh's defaults.
+  pub idle_timeout_ms: Option<u32>,
 }
 
 /// How to reach an endpoint: its id plus an optional home relay URL and direct `ip:port` addresses.
@@ -39,13 +42,18 @@ pub async fn bind(options: BindOptions) -> napi::Result<Endpoint> {
     .try_into()
     .map_err(|_| error("secretKey must be 32 bytes"))?;
   let alpn = options.alpn.into_bytes();
-  let inner = iroh::Endpoint::builder(presets::Minimal)
+  let mut builder = iroh::Endpoint::builder(presets::Minimal)
     .secret_key(SecretKey::from_bytes(&key))
     .alpns(vec![alpn.clone()])
-    .relay_mode(RelayMode::Default)
-    .bind()
-    .await
-    .map_err(error)?;
+    .relay_mode(RelayMode::Default);
+  if let Some(ms) = options.idle_timeout_ms {
+    let transport = QuicTransportConfig::builder()
+      .max_idle_timeout(Some(VarInt::from_u32(ms).into()))
+      .keep_alive_interval(Duration::from_millis(u64::from(ms / 3)))
+      .build();
+    builder = builder.transport_config(transport);
+  }
+  let inner = builder.bind().await.map_err(error)?;
   Ok(Endpoint { inner, alpn })
 }
 

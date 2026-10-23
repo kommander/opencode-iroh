@@ -43,3 +43,35 @@ test("connects by id and relay only", async () => {
   expect(relay).toStartWith("https://")
   await roundtrip(b, c, { id: b.id(), relay, addresses: [] })
 }, 30_000)
+
+test("idle timeout keeps idle connections open and detects a dead peer", async () => {
+  // The peer runs in a child process so SIGKILL takes it down without a graceful QUIC close.
+  const peer = Bun.spawn(
+    [
+      process.execPath,
+      "-e",
+      `const { bind } = require(${JSON.stringify(require.resolve("../index.js"))})
+      const b = await bind({ secretKey: crypto.getRandomValues(new Uint8Array(32)), alpn: "${alpn}", idleTimeoutMs: 2000 })
+      console.log(JSON.stringify({ id: b.id(), port: b.boundSockets()[0].split(":").at(-1) }))
+      // Globals keep the endpoint and connection from being garbage collected, which would close them.
+      globalThis.peer = { b, connection: await (await b.accept()).accept() }
+      setInterval(() => {}, 1000)`,
+    ],
+    { stdout: "pipe" },
+  )
+  const { id, port } = JSON.parse(new TextDecoder().decode((await peer.stdout.getReader().read()).value))
+  const client = await bind({ secretKey: randomBytes(32), alpn, idleTimeoutMs: 2000 })
+  const connection = await client.connect({ id, relay: null, addresses: [`127.0.0.1:${port}`] })
+  const pending = connection.acceptBi().catch((error: Error) => error)
+
+  await Bun.sleep(3000)
+  expect(connection.closeReason()).toBeNull()
+
+  peer.kill("SIGKILL")
+  const killed = Date.now()
+  while (connection.closeReason() === null && Date.now() - killed < 5000) await Bun.sleep(50)
+  console.log(`closed ${Date.now() - killed} ms after kill: ${connection.closeReason()}`)
+  expect(Date.now() - killed).toBeLessThan(3000)
+  expect(await pending).toBeInstanceOf(Error)
+  await client.close()
+}, 15_000)
