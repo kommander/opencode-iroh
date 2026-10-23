@@ -1,6 +1,6 @@
 {
   "name": "@opencode-ai/iroh",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Minimal Node/Bun binding for iroh endpoints, connections and bi-directional streams",
   "private": true,
   "license": "MIT",
