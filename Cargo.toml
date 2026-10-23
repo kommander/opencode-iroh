@@ -16,10 +16,14 @@ tokio = { version = "=1.54.1", default-features = false, features = ["macros", "
 
 [dev-dependencies]
 iroh-relay = { version = "=1.4.1", default-features = false, features = ["server"] }
-tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "=1.54.1", features = ["io-std", "io-util", "macros", "rt-multi-thread"] }
 
 [build-dependencies]
 napi-build = "=2.6.0"
+
+# iroh 1.4.1 with relay reconnects using the current auth token, see README.
+[patch.crates-io]
+iroh = { path = "patches/iroh" }
 
 [profile.release]
 opt-level = "s"

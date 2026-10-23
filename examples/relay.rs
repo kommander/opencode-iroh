@@ -1,28 +1,41 @@
-//! Relay server for the tests: plain HTTP on a random local port, admitting only the bearer token "good".
+//! Relay server for the tests: plain HTTP on a random local port, admitting only the bearer token "good". Each line
+//! on stdin restarts it on the same port, dropping all connections, admitting only the token on that line.
 
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use iroh_relay::server::{Access, AccessControl, ClientRequest, RelayConfig, Server, ServerConfig};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Debug)]
-struct Token;
+struct Token(String);
 
 impl AccessControl for Token {
   async fn on_connect(&self, request: &ClientRequest) -> Access {
-    match request.auth_token().as_deref() {
-      Some("good") => Access::Allow,
+    match request.auth_token() {
+      Some(token) if token == self.0 => Access::Allow,
       _ => Access::Deny { reason: None },
     }
   }
 }
 
-#[tokio::main]
-async fn main() {
-  let mut relay = RelayConfig::new(([127, 0, 0, 1], 0));
-  relay.access = Arc::new(Token);
+async fn spawn(addr: SocketAddr, token: String) -> Server {
+  let mut relay = RelayConfig::new(addr);
+  relay.access = Arc::new(Token(token));
   let mut config = ServerConfig::default();
   config.relay = Some(relay);
-  let server = Server::spawn(config).await.expect("relay server");
-  println!("http://{}", server.http_addr().expect("http address"));
+  Server::spawn(config).await.expect("relay server")
+}
+
+#[tokio::main]
+async fn main() {
+  let mut server = spawn(([127, 0, 0, 1], 0).into(), "good".into()).await;
+  let addr = server.http_addr().expect("http address");
+  println!("http://{addr}");
+  let mut lines = BufReader::new(tokio::io::stdin()).lines();
+  while let Ok(Some(token)) = lines.next_line().await {
+    server.shutdown().await.expect("relay shutdown");
+    server = spawn(addr, token).await;
+    println!("restarted");
+  }
   std::future::pending::<()>().await
 }

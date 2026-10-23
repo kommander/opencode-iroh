@@ -1,21 +1,17 @@
 import { afterAll, expect, test } from "bun:test"
 import { randomBytes } from "node:crypto"
 import { bind, type Endpoint } from "../index.js"
+import { startRelay } from "./relay.js"
 
 const alpn = "opencode-iroh/test"
-// examples/relay.rs: a local plain-HTTP relay admitting only the bearer token "good".
-const relay = Bun.spawn(["cargo", "run", "-q", "--example", "relay"], {
-  cwd: `${import.meta.dir}/..`,
-  stdout: "pipe",
-  stderr: "inherit",
-})
+const relay = await startRelay()
 afterAll(() => relay.kill())
 
 const online = (endpoint: Endpoint, ms: number) =>
   Promise.race([endpoint.online().then(() => true), Bun.sleep(ms).then(() => false)])
 
 test("own relays admit only endpoints with a valid token", async () => {
-  const url = new TextDecoder().decode((await relay.stdout.getReader().read()).value).trim()
+  const url = relay.url
   const relayUrls = [url]
   const [a, b, denied] = await Promise.all(
     [0, 1, 2].map(() => bind({ secretKey: randomBytes(32), alpn, relayUrls })),
@@ -42,5 +38,33 @@ test("own relays admit only endpoints with a valid token", async () => {
     expect((await stream.recv.readToEnd(1024)).toString()).toBe("pong")
   } finally {
     await Promise.all([a.close(), b.close(), denied.close()])
+  }
+}, 60_000)
+
+test("a renewed token reconnects the dropped relay connection without rebinding", async () => {
+  const fresh = await startRelay()
+  const relayUrls = [fresh.url]
+  const [endpoint, peer] = await Promise.all([0, 1].map(() => bind({ secretKey: randomBytes(32), alpn, relayUrls })))
+  try {
+    await endpoint.setRelayToken("good")
+    await endpoint.online()
+
+    // The restart drops the relay connection, and the relay now denies "good".
+    await fresh.restart("renewed")
+    while (await online(endpoint, 100));
+    expect(await online(endpoint, 3000)).toBe(false)
+
+    await Promise.all([endpoint.setRelayToken("renewed"), peer.setRelayToken("renewed")])
+    const renewed = Date.now()
+    await endpoint.online()
+    console.log(`online again ${Date.now() - renewed} ms after setRelayToken("renewed")`)
+
+    const accepted = endpoint.accept().then((incoming) => incoming!.accept())
+    const outbound = await peer.connect({ id: endpoint.id(), relay: endpoint.addr().relay, addresses: [] })
+    expect((await accepted).remoteId()).toBe(peer.id())
+    outbound.close(0, "done")
+  } finally {
+    await Promise.all([endpoint.close(), peer.close()])
+    fresh.kill()
   }
 }, 60_000)

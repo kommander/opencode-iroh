@@ -1,14 +1,13 @@
 import { afterAll, expect, test } from "bun:test"
 import { randomBytes } from "node:crypto"
 import { bind, type Endpoint, type EndpointAddr } from "../index.js"
+import { startRelay } from "./relay.js"
 
 const alpn = "opencode-iroh/test"
 const a = await bind({ secretKey: randomBytes(32), alpn })
 const b = await bind({ secretKey: randomBytes(32), alpn })
-// A fresh endpoint has no cached paths to b, so the relay-only test really dials via the relay.
-const c = await bind({ secretKey: randomBytes(32), alpn })
 
-afterAll(() => Promise.all([a.close(), b.close(), c.close()]))
+afterAll(() => Promise.all([a.close(), b.close()]))
 
 async function roundtrip(server: Endpoint, client: Endpoint, addr: EndpointAddr) {
   const accepted = server.accept().then((incoming) => incoming!.accept())
@@ -38,10 +37,20 @@ test("connects by id and direct addresses", async () => {
 })
 
 test("connects by id and relay only", async () => {
-  await b.online()
-  const relay = b.addr().relay
-  expect(relay).toStartWith("https://")
-  await roundtrip(b, c, { id: b.id(), relay, addresses: [] })
+  const relay = await startRelay()
+  // Fresh endpoints have no cached paths to each other, so this really dials via the relay.
+  const [server, client] = await Promise.all(
+    [0, 1].map(() => bind({ secretKey: randomBytes(32), alpn, relayUrls: [relay.url] })),
+  )
+  try {
+    await Promise.all([server.setRelayToken("good"), client.setRelayToken("good")])
+    await server.online()
+    expect(server.addr().relay).toBe(new URL(relay.url).href)
+    await roundtrip(server, client, { id: server.id(), relay: server.addr().relay, addresses: [] })
+  } finally {
+    await Promise.all([server.close(), client.close()])
+    relay.kill()
+  }
 }, 30_000)
 
 test("idle timeout keeps idle connections open and detects a dead peer", async () => {

@@ -23,8 +23,8 @@ pub struct BindOptions {
   /// Closes connections after this long without hearing from the peer; keep-alives every third of it keep live idle
   /// connections open. Unset keeps iroh's defaults.
   pub idle_timeout_ms: Option<u32>,
-  /// Own relays to use instead of n0's, with QUIC address discovery on port 7842. They stay unused until
-  /// `setRelayToken` provides their bearer token.
+  /// The endpoint's relays, with QUIC address discovery on port 7842. They stay unused until `setRelayToken` provides
+  /// their bearer token. Unset means no relays at all.
   pub relay_urls: Option<Vec<String>>,
 }
 
@@ -36,7 +36,7 @@ pub struct EndpointAddr {
   pub addresses: Vec<String>,
 }
 
-/// Binds an endpoint with the n0 default relays (or `relayUrls`) and no public address lookup.
+/// Binds an endpoint with only the `relayUrls` relays (none if unset) and no public address lookup.
 #[napi]
 pub async fn bind(options: BindOptions) -> napi::Result<Endpoint> {
   let key: [u8; 32] = options
@@ -48,11 +48,10 @@ pub async fn bind(options: BindOptions) -> napi::Result<Endpoint> {
   let relays = (options.relay_urls.iter().flatten())
     .map(|url| RelayUrl::from_str(url).map_err(error))
     .collect::<napi::Result<Vec<_>>>()?;
-  // iroh reads a relay's token once, when it starts the relay connection, and reuses it for every reconnect, so own
-  // relays join the map only once their token is known.
+  // The relays join the map once their token is known; dialing them without it would only be denied.
   let mode = match options.relay_urls {
     Some(_) => RelayMode::Custom(RelayMap::empty()),
-    None => RelayMode::Default,
+    None => RelayMode::Disabled,
   };
   let mut builder = iroh::Endpoint::builder(presets::Minimal)
     .secret_key(SecretKey::from_bytes(&key))
@@ -109,8 +108,8 @@ impl Endpoint {
       .collect()
   }
 
-  /// Sets the bearer token for the `relayUrls` relays, or removes them from the relay map with null. Only relay
-  /// connections started afterwards use it: iroh keeps a started connection's token, also for its reconnects.
+  /// Sets the bearer token for the `relayUrls` relays, or removes them from the relay map with null. Every relay
+  /// (re)connect uses the current token; an established relay connection is kept until it drops.
   #[napi]
   pub async fn set_relay_token(&self, token: Option<String>) {
     for url in &self.relays {
@@ -126,7 +125,7 @@ impl Endpoint {
     }
   }
 
-  /// Resolves once a home relay is connected.
+  /// Resolves once a home relay is connected; never without `relayUrls`.
   #[napi]
   pub async fn online(&self) {
     self.inner.online().await
