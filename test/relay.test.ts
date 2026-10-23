@@ -9,8 +9,6 @@ afterAll(() => relay.kill())
 
 const online = (endpoint: Endpoint, ms: number) =>
   Promise.race([endpoint.online().then(() => true), Bun.sleep(ms).then(() => false)])
-const authDenied = (endpoint: Endpoint, ms: number) =>
-  Promise.race([endpoint.relayAuthDenied().then(() => true), Bun.sleep(ms).then(() => false)])
 
 test("own relays admit only endpoints with a valid token", async () => {
   const url = relay.url
@@ -29,10 +27,8 @@ test("own relays admit only endpoints with a valid token", async () => {
     await Promise.all([a.online(), b.online()])
     expect(a.addr().relay).toBe(new URL(url).href)
     expect(await online(denied, 2000)).toBe(false)
-    // Reported once per token: the retries with "bad" are not reported again until a new token is set.
-    expect(await authDenied(denied, 2000)).toBe(false)
-    await denied.setRelayToken("worse")
-    expect((await denied.relayAuthDenied())?.url).toBe(new URL(url).href)
+    await denied.setRelayToken("good")
+    await denied.online()
 
     const accepted = b.accept().then((incoming) => incoming!.accept())
     const outbound = await a.connect({ id: b.id(), relay: b.addr().relay, addresses: [] })

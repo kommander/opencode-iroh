@@ -30,9 +30,9 @@ export declare class Endpoint {
    */
   setRelayToken(token?: string | undefined | null): Promise<void>
   /**
-   * Resolves when a home relay denies the token set with `setRelayToken`, or with null once the endpoint is closed.
-   * Resolves once per token: after that, only once `setRelayToken` is called again and a later connection attempt
-   * is denied. A denial that happened before the call counts until it is reported; every pending call resolves with it.
+   * Resolves with the first home relay denial since the last `setRelayToken`, or with null once the endpoint is closed.
+   * Meant for one caller that renews the token after each denial: until `setRelayToken` is called again, it keeps
+   * resolving with the current denial or iroh's next retry of the denied token.
    */
   relayAuthDenied(): Promise<RelayAuthDenied | null>
   /** Resolves once a home relay is connected; never without `relayUrls`. */

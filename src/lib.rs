@@ -40,7 +40,6 @@ pub struct EndpointAddr {
 
 /// A home relay's denial of the endpoint's bearer token.
 #[napi(object)]
-#[derive(Clone)]
 pub struct RelayAuthDenied {
   pub url: String,
   /// As reported by the relay; human-readable, not meant to be matched on.
@@ -80,12 +79,7 @@ pub async fn bind(options: BindOptions) -> napi::Result<Endpoint> {
     inner,
     alpn,
     relays,
-    denial: std::sync::Mutex::new(Denial {
-      armed: true,
-      stale: Vec::new(),
-      reports: 0,
-      last: None,
-    }),
+    stale: Default::default(),
   })
 }
 
@@ -94,16 +88,8 @@ pub struct Endpoint {
   inner: iroh::Endpoint,
   alpn: Vec<u8>,
   relays: Vec<RelayUrl>,
-  denial: std::sync::Mutex<Denial>,
-}
-
-/// `relayAuthDenied` reports one denial per token: `armed` until it does, and denials already in `stale` when the token
-/// was set were not answers to it. Every call pending when a denial is reported resolves with it (`reports`, `last`).
-struct Denial {
-  armed: bool,
-  stale: Vec<RelayStatus>,
-  reports: u64,
-  last: Option<RelayAuthDenied>,
+  /// Home relay statuses when the token was last set: denials among them were not answers to the current token.
+  stale: std::sync::Mutex<Vec<RelayStatus>>,
 }
 
 #[napi]
@@ -150,50 +136,34 @@ impl Endpoint {
         }
       }
     }
-    let mut denial = self.denial.lock().unwrap();
-    denial.armed = true;
-    denial.stale = self.inner.home_relay_status().get();
+    *self.stale.lock().unwrap() = self.inner.home_relay_status().get();
   }
 
-  /// Resolves when a home relay denies the token set with `setRelayToken`, or with null once the endpoint is closed.
-  /// Resolves once per token: after that, only once `setRelayToken` is called again and a later connection attempt
-  /// is denied. A denial that happened before the call counts until it is reported; every pending call resolves with it.
+  /// Resolves with the first home relay denial since the last `setRelayToken`, or with null once the endpoint is closed.
+  /// Meant for one caller that renews the token after each denial: until `setRelayToken` is called again, it keeps
+  /// resolving with the current denial or iroh's next retry of the denied token.
   #[napi]
   pub async fn relay_auth_denied(&self) -> Option<RelayAuthDenied> {
-    let since = self.denial.lock().unwrap().reports;
+    let stale = self.stale.lock().unwrap().clone();
     let mut watcher = self.inner.home_relay_status();
     let denied = async {
       let mut statuses = watcher.get();
       loop {
-        if let Some(denied) = self.take_denial(&statuses, since) {
-          return Some(denied);
+        let denied = (statuses.iter())
+          .filter(|status| !stale.contains(status))
+          .find_map(|status| {
+            Some(RelayAuthDenied {
+              url: status.url().to_string(),
+              reason: status.auth_denied_reason()?.to_owned(),
+            })
+          });
+        if denied.is_some() {
+          return denied;
         }
         statuses = watcher.updated().await.ok()?;
       }
     };
     self.inner.closed().run_until(denied).await.flatten()
-  }
-
-  fn take_denial(&self, statuses: &[RelayStatus], since: u64) -> Option<RelayAuthDenied> {
-    let mut denial = self.denial.lock().unwrap();
-    if denial.armed && denial.reports == since {
-      let found = (statuses.iter())
-        .filter(|status| !denial.stale.contains(status))
-        .find_map(|status| {
-          Some(RelayAuthDenied {
-            url: status.url().to_string(),
-            reason: status.auth_denied_reason()?.to_owned(),
-          })
-        });
-      if let Some(found) = found {
-        denial.armed = false;
-        denial.reports += 1;
-        denial.last = Some(found);
-      }
-    }
-    (denial.reports != since)
-      .then(|| denial.last.clone())
-      .flatten()
   }
 
   /// Resolves once a home relay is connected; never without `relayUrls`.
