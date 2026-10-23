@@ -9,6 +9,8 @@ afterAll(() => relay.kill())
 
 const online = (endpoint: Endpoint, ms: number) =>
   Promise.race([endpoint.online().then(() => true), Bun.sleep(ms).then(() => false)])
+const authDenied = (endpoint: Endpoint, ms: number) =>
+  Promise.race([endpoint.relayAuthDenied().then(() => true), Bun.sleep(ms).then(() => false)])
 
 test("own relays admit only endpoints with a valid token", async () => {
   const url = relay.url
@@ -20,10 +22,17 @@ test("own relays admit only endpoints with a valid token", async () => {
     expect(await online(a, 2000)).toBe(false)
 
     await denied.setRelayToken("bad")
+    const rejected = await denied.relayAuthDenied()
+    console.log(`first connection attempt denied: ${JSON.stringify(rejected)}`)
+    expect(rejected?.url).toBe(new URL(url).href)
     await Promise.all([a.setRelayToken("good"), b.setRelayToken("good")])
     await Promise.all([a.online(), b.online()])
     expect(a.addr().relay).toBe(new URL(url).href)
     expect(await online(denied, 2000)).toBe(false)
+    // Reported once per token: the retries with "bad" are not reported again until a new token is set.
+    expect(await authDenied(denied, 2000)).toBe(false)
+    await denied.setRelayToken("worse")
+    expect((await denied.relayAuthDenied())?.url).toBe(new URL(url).href)
 
     const accepted = b.accept().then((incoming) => incoming!.accept())
     const outbound = await a.connect({ id: b.id(), relay: b.addr().relay, addresses: [] })
@@ -49,10 +58,12 @@ test("a renewed token reconnects the dropped relay connection without rebinding"
     await endpoint.setRelayToken("good")
     await endpoint.online()
 
-    // The restart drops the relay connection, and the relay now denies "good".
+    // The restart drops the relay connection, and the relay now denies "good" on reconnect.
     await fresh.restart("renewed")
-    while (await online(endpoint, 100));
-    expect(await online(endpoint, 3000)).toBe(false)
+    const rejected = await endpoint.relayAuthDenied()
+    console.log(`reconnect denied: ${JSON.stringify(rejected)}`)
+    expect(rejected?.url).toBe(new URL(fresh.url).href)
+    expect(await online(endpoint, 100)).toBe(false)
 
     await Promise.all([endpoint.setRelayToken("renewed"), peer.setRelayToken("renewed")])
     const renewed = Date.now()
@@ -63,6 +74,10 @@ test("a renewed token reconnects the dropped relay connection without rebinding"
     const outbound = await peer.connect({ id: endpoint.id(), relay: endpoint.addr().relay, addresses: [] })
     expect((await accepted).remoteId()).toBe(peer.id())
     outbound.close(0, "done")
+
+    const closed = endpoint.relayAuthDenied()
+    await endpoint.close()
+    expect(await closed).toBeNull()
   } finally {
     await Promise.all([endpoint.close(), peer.close()])
     fresh.kill()

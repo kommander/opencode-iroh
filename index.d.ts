@@ -29,6 +29,12 @@ export declare class Endpoint {
    * (re)connect uses the current token; an established relay connection is kept until it drops.
    */
   setRelayToken(token?: string | undefined | null): Promise<void>
+  /**
+   * Resolves when a home relay denies the token set with `setRelayToken`, or with null once the endpoint is closed.
+   * Resolves once per token: after that, only once `setRelayToken` is called again and a later connection attempt
+   * is denied. A denial that happened before the call counts until it is reported; every pending call resolves with it.
+   */
+  relayAuthDenied(): Promise<RelayAuthDenied | null>
   /** Resolves once a home relay is connected; never without `relayUrls`. */
   online(): Promise<void>
   /** Dials `addr` with the endpoint's ALPN. The TLS handshake proves the remote holds `addr.id`'s key. */
@@ -90,4 +96,11 @@ export interface EndpointAddr {
   id: string
   relay: string | null
   addresses: Array<string>
+}
+
+/** A home relay's denial of the endpoint's bearer token. */
+export interface RelayAuthDenied {
+  url: string
+  /** As reported by the relay; human-readable, not meant to be matched on. */
+  reason: string
 }

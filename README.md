@@ -23,6 +23,8 @@ const relayUrls = ["https://relay.example.com"] // own relays admitting clients 
 const endpoint = await bind({ secretKey, alpn: "opencode/peer/1", idleTimeoutMs: 10_000, relayUrls }) // secretKey: 32 bytes
 await endpoint.setRelayToken(token) // the relays stay unused until a token is set; call again to renew, null removes them
 endpoint.id() // hex public key
+// In the background: renew the token when a relay denies it ({ url, reason }); null once the endpoint is closed.
+;(async () => { while (await endpoint.relayAuthDenied()) await endpoint.setRelayToken(await fetchToken()) })()
 await endpoint.online() // resolves once a home relay is connected (never without relays)
 endpoint.addr() // { id, relay: string | null, addresses: string[] }
 endpoint.boundSockets() // e.g. ["0.0.0.0:51234", "[::]:51235"]
@@ -49,6 +51,8 @@ await endpoint.close()
 `idleTimeoutMs` (optional) closes a connection once the peer has been silent that long, so a dead peer is noticed within roughly `idleTimeoutMs` to 4/3 × `idleTimeoutMs`; keep-alives every `idleTimeoutMs / 3` keep healthy idle connections open. Keep the `Endpoint` referenced while its connections are in use: if it is garbage collected, its connections close.
 
 `relayUrls` (optional) are the endpoint's relays; iroh's default QUIC address discovery (UDP port 7842) runs against them. Unset means no relays at all: peers are reachable only by direct addresses. The relays join the endpoint's relay map only on `setRelayToken(token)`, which sends `token` as the bearer token when connecting; `setRelayToken(null)` removes them from the map. Every relay connect and reconnect uses the current token, so renewing it with `setRelayToken(newToken)` needs no re-bind: an established relay connection keeps running, and once it drops (or while it is being denied) the next attempt, at most iroh's reconnect backoff (≤ 16 s) later, uses the new token.
+
+`relayAuthDenied()` tells when to renew: it resolves with `{ url, reason }` when the home relay denies the current token, on the first connection attempt or on a reconnect, and with null once the endpoint is closed. It resolves once per token: iroh keeps retrying the denied token with its backoff, but those denials are not reported again until `setRelayToken` is called and a later attempt is denied (one attempt already under way during `setRelayToken` may still carry the old token). A denial that happened while nobody was waiting is reported to the next call; every call pending at that moment resolves with it, so an abandoned call (for example one that lost a `Promise.race`) does not swallow it.
 
 `send.reset(code?)` and `recv.stop(code?)` abort a stream and interrupt a pending `writeAll` / `read`. See [`index.d.ts`](index.d.ts) for the full declarations.
 
